@@ -23,7 +23,16 @@ available via platform-tools for device work.
 
 ## Investigations
 
-None yet — no artifacts exist (no `game.wasm`, no `.so`, no APK, no device).
+- 2026-10-15 hardening pass: all findings came from conventional tools
+  (`cargo`/`rustc`/`clippy` diagnostics, `llvm-readelf`/`llvm-nm`, `aapt2`,
+  `zipalign`, registry-source grep) per the investigation policy — no REA
+  backend was needed. Static inspection only; nothing here proves runtime.
+- Artifacts now in scope for future REA work (hashes in `ANDROID_BUILD.md`):
+  `libmuguet.so` (ELF AArch64, build ID present) and `app-debug.apk`
+  (arm64-v8a). APK inspection so far is `aapt2`-level (badging, zip listing);
+  JADX-backed decompilation still unconfigured (deferred with setup).
+- Status values used across docs: NOT STARTED | IN PROGRESS |
+  IMPLEMENTED — UNTESTED | VERIFIED | BLOCKED | FAILED (see PORT_STATUS).
 Per the investigation policy, source-level questions stay on conventional tools;
 every future entry here must record artifact hash, tool version, command, and
 evidence scope (`static inspection` / `runtime observation` / `inferred` /

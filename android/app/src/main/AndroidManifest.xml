@@ -9,10 +9,16 @@
 
     <application
         android:label="Muguet"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
-        android:largeHeap="true"
         android:allowBackup="true"
         android:supportsRtl="false">
+        <!-- sensorLandscape: intentional (game renders landscape); the
+             DiscouragedApi lint is acknowledged, not suppressed. -->
+        <!-- NOTE: no android:largeHeap: it raises only the Dalvik heap, while
+             this app's memory (WASM heap, GPU, native) is native and unaffected.
+             allowBackup=true is intentional: saves live in app-private files. -->
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"

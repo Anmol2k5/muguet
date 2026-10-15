@@ -3575,3 +3575,16 @@ fn radar_compat(source: &str) -> Option<String> {
         None
     } else { Some(text) }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The execution backend must match the OS: Metal on Apple, Vulkan on
+    /// Android. A mismatch here means the wrong GPU API at startup.
+    #[test]
+    fn native_backend_matches_platform() {
+        #[cfg(target_os = "android")]
+        assert_eq!(super::NATIVE_BACKENDS, super::Backends::VULKAN);
+        #[cfg(target_vendor = "apple")]
+        assert_eq!(super::NATIVE_BACKENDS, super::Backends::METAL);
+    }
+}

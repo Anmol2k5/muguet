@@ -46,6 +46,8 @@ fn backbuffer_size(window: &Window) -> (i32, i32) {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        #[cfg(target_os = "android")]
+        crate::alog::i("lifecycle", "resumed");
         gpu::SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
 
         #[cfg(target_os = "ios")]
@@ -75,6 +77,8 @@ impl ApplicationHandler for App {
         let (w, h) = backbuffer_size(&window);
         input::set_size(w, h);
         eprintln!("[app] window {}x{} px, back buffer {w}x{h}", window.inner_size().width, window.inner_size().height);
+        #[cfg(target_os = "android")]
+        crate::alog::i("lifecycle", &format!("window {}x{} px, back buffer {w}x{h}", window.inner_size().width, window.inner_size().height));
         #[cfg(target_os = "ios")]
         crate::touch::install(&window);
         self.window = Some(window);
@@ -150,6 +154,8 @@ impl ApplicationHandler for App {
             }
             #[cfg(target_os = "ios")]
             WindowEvent::Touch(t) => crate::touch::touch(&t),
+            #[cfg(target_os = "android")]
+            WindowEvent::Touch(t) => crate::atouch::touch(&window, &t),
             WindowEvent::MouseWheel { delta, .. } => {
                 self.wheel_accum += match delta { MouseScrollDelta::LineDelta(_, y) => y as f64 / 3.0 * 3.0, MouseScrollDelta::PixelDelta(p) => p.y / 100.0 };
                 let n = self.wheel_accum.trunc();
@@ -208,7 +214,13 @@ impl App {
                 if let Err(e) = crate::run_engine(&rt, args) {
                     eprintln!("[host] engine failed: {e:?}");
                 }
+                // Desktop/iOS quit when the game main returns. On Android the
+                // process is owned by the activity lifecycle: killing it here
+                // would skip surface/thread teardown, so just park the thread.
+                #[cfg(not(target_os = "android"))]
                 std::process::exit(0);
+                #[cfg(target_os = "android")]
+                eprintln!("[host] engine thread finished");
             })
             .expect("spawn engine thread");
     }
@@ -281,7 +293,7 @@ pub fn run(rt: Option<Arc<Runtime>>, startup: crate::config::Startup, args: Vec<
             .build()?;
         event_loop.set_control_flow(ControlFlow::Wait);
         event_loop.run_app(&mut app)?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "android"))]
     {

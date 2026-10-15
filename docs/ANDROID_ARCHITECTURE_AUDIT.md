@@ -33,7 +33,10 @@ Rust pinned by upstream: `1.98.1`. No `AGENTS.md` in repo.
   4 threads, blocking ≤8 ms (`PIPELINE_WAIT`, `src/gpu.rs:959-973,2486-2514`).
 - Audio: cpal stereo 48 kHz default buffer (`src/audio.rs:32-39`), f32 ring in shared
   memory; Opus decoded natively via `audiopus_sys` static libopus (`src/opus.rs`).
-  No Apple audio API in the Rust path.
+  No Apple audio API in the Rust path. Android: AAudio confirmed at link
+  (`NEEDED libaaudio.so`); `best_config()` negotiates a supported config
+  (prefers stereo/48 kHz/F32, falls back to device default) instead of assuming;
+  failures log and run muted, never crash.
 - Input: winit events + polled GameController/keyboard/mouse → shared-memory atomic
   block (`src/input.rs:9-54`); iOS touch overlay is raw UIKit via objc2
   (`src/touch.rs`, ~796 lines, ~30 buttons + sticks + nav pad).
@@ -101,9 +104,24 @@ defaults apply (UNCONFIRMED which defaults matter on Android until device-tested
 - `src/gpu.rs:875-922,944-950,3397-3416` — adapter/device/surface-format/swapchain
   selection needs Vulkan-tuned choices; `want` feature set (`:899-903`) needs
   per-device validation (see §D).
-- `src/audio.rs:13-64` — cpal on Android uses AAudio (CONFIRMED at link level:
-  the Android binary carries `NEEDED libaaudio.so`); still needs explicit config
-  negotiation + audio-focus handling instead of hardcoded 48 kHz.
+- `src/audio.rs` — cpal on Android uses AAudio (CONFIRMED at link level:
+  the Android binary carries `NEEDED libaaudio.so`); `best_config()` negotiates
+  a supported config (prefers stereo/48 kHz/F32, falls back to device default)
+  and failures log via `alog` then run muted. Audio-focus handling is M8 work.
+- `src/alog.rs` (new, Android-only) — logcat via `__android_log_write`
+  (tag `muguet`, `[category]` prefixes, 3 KB chunking) + panic hook; wired into
+  `android_main`, config/runtime errors, window lifecycle, audio and selftest.
+  On-device visibility UNTESTED.
+- `src/atouch.rs` (new, Android-only) — minimal touch boundary: primary contact
+  drives absolute cursor + left button through the shared input block;
+  extra fingers ignored. Full gesture mapping is M8.
+- `src/selftest.rs` (new, `pub`, jit-gated) — device-executable smoke tests:
+  `--selftest=wasm|vulkan|all` (or Android `SELFTEST` marker file); WASM tests
+  run on the real engine policy; Vulkan test is headless adapter+device+submit.
+- Android memory policy (`src/lib.rs`): `mobile_memory()` covers iOS+Android;
+  Android reserve 8 GiB VA (`MUGUET_WASM_RESERVE_GB`-tunable, costs no RAM until
+  committed), guard 1 GiB; declared memory max clamped to the reservation.
+  Real working set still UNMEASURED (M6/M9).
 - `src/input.rs`, `src/pad.rs` — shared-block + key/mouse logic reusable; `pad.rs`
   GameController backend must move to Android input APIs; `keyboard.rs`/`mouse.rs`
   (objc2) are iOS-only modules (`main.rs:14-17`) — Android needs its own adapters.
@@ -131,8 +149,12 @@ defaults apply (UNCONFIRMED which defaults matter on Android until device-tested
   executable-memory mapping proves viable — UNCONFIRMED until device-tested).
 - `scripts/build-android.sh`, Gradle project, `AndroidManifest.xml`
   (Vulkan feature, permissions: INTERNET + gamepad/vibrate as needed).
-- Android address-space tuning: do NOT reuse 17 GiB macOS reservation blindly;
-  needs device measurement (see WASM doc).
+- Android entry: `android_main` (Rust ABI, `AndroidApp` from winit's re-export),
+  `MUGUET_SUPPORT_DIR` from `internal_data_path()` (no JNI), clone-out app
+  handle (re-entry safe), `EventLoopBuilderExtAndroid::with_android_app`.
+  Missing game data logs and still reaches the event loop (M3 shell behavior).
+- Android address-space policy: 8 GiB VA reserve + declared-max clamp
+  (see above); device measurement still required for the real working set.
 
 ### D. Requires investigation before feasibility is known
 

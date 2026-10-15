@@ -19,19 +19,39 @@ pub fn start(ring: u64, capacity: u32) {
         .name("audio".into())
         .spawn(move || match play(ring, capacity) {
             Ok(stream) => {
-                eprintln!("[audio] CoreAudio output started (ring 0x{ring:x}, {capacity} frames)");
+                eprintln!("[audio] output started (ring 0x{ring:x}, {capacity} frames)");
+                #[cfg(target_os = "android")]
+                crate::alog::i("audio", &format!("output started (ring 0x{ring:x}, {capacity} frames)"));
                 let _keep = stream;
                 loop { std::thread::park(); }
             }
-            Err(e) => eprintln!("[audio] no output: {e:#}"),
+            Err(e) => {
+                // No crash: the game runs muted (ring still advances guest-side).
+                eprintln!("[audio] no output: {e:#}");
+                #[cfg(target_os = "android")]
+                crate::alog::e("audio", &format!("no output: {e:#}"));
+            }
         })
         .expect("spawn audio thread");
+}
+
+/// Pick a supported output config instead of assuming 48 kHz stereo exists.
+/// Prefers stereo 48 kHz F32 (what the game produces); falls back to the
+/// device default. Returns None when nothing usable is advertised.
+fn best_config(device: &cpal::Device) -> Option<cpal::StreamConfig> {
+    use cpal::SampleFormat;
+    let mut supported = device.supported_output_configs().ok()?;
+    let preferred = supported.find(|c| c.channels() == 2 && c.min_sample_rate() <= 48000 && c.max_sample_rate() >= 48000 && c.sample_format() == SampleFormat::F32);
+    if let Some(c) = preferred {
+        return Some(c.with_sample_rate(48000).config());
+    }
+    device.default_output_config().ok().map(|c| c.config())
 }
 
 fn play(ring: u64, capacity: u32) -> anyhow::Result<cpal::Stream> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| anyhow::anyhow!("no default output device"))?;
-    let config = cpal::StreamConfig { channels: 2, sample_rate: 48000, buffer_size: cpal::BufferSize::Default };
+    let config = best_config(&device).unwrap_or(cpal::StreamConfig { channels: 2, sample_rate: 48000, buffer_size: cpal::BufferSize::Default });
     let (base, _) = crate::mem_base_len(&RT.get().unwrap().mem);
     let base = base as usize;
     let hdr = move |i: usize| -> &'static AtomicI32 { unsafe { &*((base + ring as usize + 4 * i) as *const AtomicI32) } };

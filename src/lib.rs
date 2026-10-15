@@ -11,6 +11,8 @@ mod host;
 mod input;
 mod import;
 mod io;
+#[cfg(target_os = "android")]
+mod alog;
 #[cfg(target_os = "ios")]
 mod keyboard;
 #[cfg(target_os = "ios")]
@@ -20,10 +22,14 @@ mod opus;
 mod pad;
 #[cfg(feature = "jit")]
 mod patch;
+#[cfg(feature = "jit")]
+pub mod selftest;
 mod proto;
 mod server;
 #[cfg(target_os = "ios")]
 mod touch;
+#[cfg(target_os = "android")]
+mod atouch;
 
 use anyhow::{Context, Result};
 use std::sync::atomic::AtomicU64;
@@ -271,6 +277,8 @@ pub fn run() -> Result<()> {
     let startup = match config::setup() {
         Ok(s) => s,
         Err(e) => {
+            #[cfg(target_os = "android")]
+            crate::alog::e("startup", &format!("config setup failed: {e:#}"));
             eprintln!("[config] {e:#}");
             alert("Muguet", &format!("{e:#}"));
             std::process::exit(1);
@@ -285,10 +293,20 @@ pub fn run() -> Result<()> {
         }
         return Ok(());
     }
+    #[cfg(feature = "jit")]
+    if let Some(kind) = selftest::requested(&argv, &startup.cache_dir) {
+        selftest::run(&kind)?;
+        return Ok(());
+    }
     // Android shell (M3): reach the event loop even with no game data yet;
     // the missing-data error is logged and import lands later.
     #[cfg(target_os = "android")]
-    let rt = make_runtime(&startup).map_err(|e| eprintln!("[config] {e:#}")).ok();
+    let rt = make_runtime(&startup)
+        .map_err(|e| {
+            crate::alog::e("wasm", &format!("no game runtime (assets missing?): {e:#}"));
+            eprintln!("[config] {e:#}");
+        })
+        .ok();
     #[cfg(all(not(target_os = "ios"), not(target_os = "android")))]
     let rt = Some(make_runtime(&startup)?);
     #[cfg(target_os = "ios")]
@@ -320,20 +338,31 @@ static ANDROID_APP: std::sync::Mutex<
 
 #[cfg(target_os = "android")]
 pub fn take_android_app() -> Option<winit::platform::android::activity::AndroidApp> {
-    ANDROID_APP.lock().unwrap().take()
+    // Cloned, not taken: the activity can be recreated in-process and a
+    // second android_main must still get a handle instead of panicking.
+    ANDROID_APP.lock().unwrap().clone()
 }
 
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
+    crate::alog::init();
+    crate::alog::i("lifecycle", "android_main: NativeActivity created");
     // App-private storage for config/game/saves; no JNI needed for this.
-    if let Some(dir) = app.internal_data_path() {
-        std::env::set_var("MUGUET_SUPPORT_DIR", dir.join("muguet"));
+    match app.internal_data_path() {
+        Some(dir) => {
+            let support = dir.join("muguet");
+            crate::alog::i("storage", &format!("MUGUET_SUPPORT_DIR={}", support.display()));
+            std::env::set_var("MUGUET_SUPPORT_DIR", support);
+        }
+        None => crate::alog::e("storage", "internal_data_path() unavailable; storage will fail"),
     }
     *ANDROID_APP.lock().unwrap() = Some(app);
     if let Err(e) = run() {
+        crate::alog::e("startup", &format!("android_main failed: {e:#}"));
         eprintln!("[host] android_main failed: {e:#}");
     }
+    crate::alog::i("lifecycle", "android_main returned");
 }
 
 pub fn make_runtime(startup: &config::Startup) -> Result<Arc<Runtime>> {
@@ -491,7 +520,9 @@ fn compile_patched(engine: &Engine, wasm_path: &std::path::Path) -> Result<Modul
     Module::new(engine, &patched).map_err(anyhow::Error::from).context("compile module")
 }
 
+#[cfg(not(target_os = "android"))]
 const IOS_HEAP_MAX: u64 = ios_heap_gb() << 30;
+#[cfg(not(target_os = "android"))]
 const fn ios_heap_gb() -> u64 {
     match option_env!("MUGUET_IOS_HEAP_GB") {
         Some(v) => {
@@ -509,11 +540,17 @@ const fn ios_heap_gb() -> u64 {
 }
 
 fn heap_type(mt: MemoryType) -> Result<MemoryType> {
-    if !ios_memory() {
+    // Cap the declared memory max to this platform's reservation so a module
+    // authored for desktop address space cannot reserve more VA than the
+    // mobile policy allows. The actual game working set is NOT reduced here:
+    // growth still fails gracefully via emscripten_resize_heap if the game
+    // genuinely needs more than the reservation.
+    let cap_bytes = mobile_reserve();
+    if !mobile_memory() {
         return Ok(mt);
     }
     let page = 1u64 << mt.page_size_log2();
-    let cap = IOS_HEAP_MAX / page;
+    let cap = cap_bytes / page;
     let max = mt.maximum().map(|m| m.min(cap)).unwrap_or(cap).max(mt.minimum());
     MemoryTypeBuilder::new()
         .min(mt.minimum())
@@ -526,14 +563,53 @@ fn heap_type(mt: MemoryType) -> Result<MemoryType> {
 }
 
 fn engine_config() -> Config {
-    engine_config_for(ios_memory())
+    engine_config_for(mobile_memory())
 }
 
-fn ios_memory() -> bool {
-    cfg!(target_os = "ios")
+/// iOS and Android share the "mobile" reservation policy (capped virtual
+/// address space); desktop keeps the large 17 GiB default. Android must NOT
+/// inherit the desktop default: address space and guard cost differ per OS.
+fn mobile_memory() -> bool {
+    cfg!(any(target_os = "ios", target_os = "android"))
 }
 
-fn engine_config_for(ios: bool) -> Config {
+/// Virtual-address reservation for the shared game memory, in bytes.
+fn mobile_reserve() -> u64 {
+    #[cfg(target_os = "ios")]
+    {
+        IOS_HEAP_MAX
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Runtime-tunable: MUGUET_WASM_RESERVE_GB (default 8). This is VA, not
+        // RAM; it must cover the game's committed working set, which is still
+        // UNMEASURED (M6). Do not lower it to "save memory" — reservation
+        // costs no RAM until committed.
+        std::env::var("MUGUET_WASM_RESERVE_GB")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|gb| gb.max(1) << 30)
+            .unwrap_or(8 << 30)
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        // Cross-compile hosts (e.g. --precompile-ios/android on macOS).
+        IOS_HEAP_MAX.max(8 << 30)
+    }
+}
+
+fn mobile_guard() -> u64 {
+    #[cfg(target_os = "ios")]
+    {
+        64 << 10
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        1 << 30
+    }
+}
+
+fn engine_config_for(mobile: bool) -> Config {
     let mut config = Config::new();
     config.wasm_memory64(true);
     config.wasm_threads(true);
@@ -543,9 +619,9 @@ fn engine_config_for(ios: bool) -> Config {
     #[cfg(feature = "jit")]
     config.cranelift_opt_level(OptLevel::Speed);
 
-    if ios {
-        config.memory_reservation(IOS_HEAP_MAX);
-        config.memory_guard_size(64 << 10);
+    if mobile {
+        config.memory_reservation(mobile_reserve());
+        config.memory_guard_size(mobile_guard());
     } else {
         config.memory_reservation(17 << 30);
         config.memory_guard_size(2 << 30);
