@@ -28,6 +28,7 @@ DerivedData/
 /assemble-*.log
 /gradle-assemble.log
 /android/*.log
+/apk-*.log
 # Android generated outputs (rebuilt via scripts/build-android.sh + gradle)
 /android/app/build/
 /android/.gradle/

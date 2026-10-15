@@ -41,5 +41,18 @@ case "$MODE" in
   check)   exec cargo check --target "$TARGET" ;;
   build)   exec cargo build --target "$TARGET" ;;
   release) exec cargo build --release --target "$TARGET" ;;
-  *) echo "usage: $0 [check|build|release]" >&2; exit 1 ;;
+  apk)
+    cargo build --release --target "$TARGET"
+    SO="target/$TARGET/release/libmuguet.so"
+    JNIDIR="android/app/src/main/jniLibs/arm64-v8a"
+    mkdir -p "$JNIDIR"
+    cp "$SO" "$JNIDIR/libmuguet.so"
+    echo "[apk] staged $SO"
+    GRADLE_BIN="${GRADLE_BIN:-gradle}"
+    (cd android && "$GRADLE_BIN" :app:assembleDebug)
+    APK="android/app/build/outputs/apk/debug/app-debug.apk"
+    echo "[apk] $APK"
+    sha256sum "$APK" 2>/dev/null || shasum -a 256 "$APK"
+    ;;
+  *) echo "usage: $0 [check|build|release|apk]" >&2; exit 1 ;;
 esac
