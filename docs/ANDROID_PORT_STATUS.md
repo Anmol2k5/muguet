@@ -1,6 +1,6 @@
 # Muguet Android — Port Status
 
-Branch: `android-port` @ `97a96d0` (parent: upstream `99f3704`, `main` untouched).
+Branch: `android-port` (upstream `main` untouched at `99f3704`).
 Updated: 2026-10-15 (hardening pass).
 
 Statuses: NOT STARTED | IN PROGRESS | IMPLEMENTED — UNTESTED | VERIFIED |
