@@ -241,8 +241,12 @@ mod tests {
     }
 
     impl Env {
-        /// Point HOME at a fresh scratch dir and clear Muguet vars.
-        fn scratch(tag: &str) -> (MutexGuard<'static, ()>, Env, PathBuf) {
+        /// Point HOME at a fresh scratch dir and clear Muguet vars. Returns
+        /// the scratch HOME plus the *production-resolved* support dir:
+        /// on desktop Unix that is `$HOME/Library/Application Support/Muguet`,
+        /// NOT `$HOME` itself — fixtures must live under the resolved dir or
+        /// `game_dir()`/`locate()` will never see them.
+        fn scratch(tag: &str) -> (MutexGuard<'static, ()>, Env, PathBuf, PathBuf) {
             let guard = ENV_LOCK.lock().unwrap();
             let mut saved = Vec::new();
             for k in ENV_KEYS {
@@ -252,7 +256,9 @@ mod tests {
             let home = std::env::temp_dir().join(format!("muguet-cfg-test-{}-{tag}", std::process::id()));
             let _ = std::fs::remove_dir_all(&home);
             std::env::set_var("HOME", &home);
-            (guard, Env { saved }, home)
+            let support = support_dir();
+            assert!(support.starts_with(&home), "support dir must stay inside scratch HOME");
+            (guard, Env { saved }, home, support)
         }
     }
 
@@ -267,19 +273,19 @@ mod tests {
         }
     }
 
-    fn write_layout(home: &Path, with_manifest: bool, with_shaders: bool, with_wasm: bool) {
+    fn write_layout(support: &Path, with_manifest: bool, with_shaders: bool, with_wasm: bool) {
         if with_manifest {
-            let data = home.join("game/data");
+            let data = support.join("game/data");
             std::fs::create_dir_all(&data).unwrap();
             std::fs::write(data.join("manifest.json"), "{}").unwrap();
         }
         if with_shaders {
-            let sh = home.join("game/b/1/shaders");
+            let sh = support.join("game/b/1/shaders");
             std::fs::create_dir_all(&sh).unwrap();
             std::fs::write(sh.join("index.json"), "{}").unwrap();
         }
         if with_wasm {
-            std::fs::write(home.join("game/b/1/game.wasm"), []).unwrap();
+            std::fs::write(support.join("game/b/1/game.wasm"), []).unwrap();
         }
     }
 
@@ -296,21 +302,21 @@ mod tests {
 
     #[test]
     fn missing_assets_are_not_ready() {
-        let (_g, _env, home) = Env::scratch("missing");
+        let (_g, _env, _home, support) = Env::scratch("missing");
         assert!(!game_ready());
         // Manifest alone is not enough (shaders index required too).
-        write_layout(&home, true, false, false);
+        write_layout(&support, true, false, false);
         assert!(!game_ready());
     }
 
     #[test]
     fn invalid_assets_stay_not_ready() {
-        let (_g, _env, home) = Env::scratch("invalid");
+        let (_g, _env, _home, support) = Env::scratch("invalid");
         // Shaders without a manifest, and wasm without either, are rejected.
-        write_layout(&home, false, true, true);
+        write_layout(&support, false, true, true);
         assert!(!game_ready());
         // Manifest + shaders but no game.wasm: not ready under jit.
-        write_layout(&home, true, true, false);
+        write_layout(&support, true, true, false);
         if cfg!(feature = "jit") && !crate::code_embedded() {
             assert!(!game_ready());
         }
@@ -318,23 +324,24 @@ mod tests {
 
     #[test]
     fn normal_init_with_valid_layout() {
-        let (_g, _env, home) = Env::scratch("valid");
-        write_layout(&home, true, true, true);
+        let (_g, _env, home, support) = Env::scratch("valid");
+        write_layout(&support, true, true, true);
         assert!(game_ready());
         let startup = setup().expect("setup must succeed with a valid layout");
         assert!(startup.wasm_path.ends_with("game.wasm"));
-        assert!(home.join("saves").is_dir());
-        assert!(home.join("config.json").is_file());
-        assert_eq!(std::env::var("MUGUET_FSROOT").unwrap(), home.join("saves").to_str().unwrap());
+        assert!(support.join("saves").is_dir());
+        assert!(support.join("config.json").is_file());
+        assert_eq!(std::env::var("MUGUET_FSROOT").unwrap(), support.join("saves").to_str().unwrap());
         let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn corrupt_config_falls_back_to_defaults() {
-        let (_g, _env, home) = Env::scratch("corrupt");
-        write_layout(&home, true, true, true);
-        // Invalid JSON must not fail init; defaults apply.
-        std::fs::write(home.join("config.json"), "{not json").unwrap();
+        let (_g, _env, home, support) = Env::scratch("corrupt");
+        write_layout(&support, true, true, true);
+        // Invalid JSON in the REAL config location must not fail init;
+        // defaults apply.
+        std::fs::write(support.join("config.json"), "{not json").unwrap();
         let startup = setup().expect("setup must tolerate a corrupt config.json");
         assert!(startup.wasm_path.ends_with("game.wasm"));
         let _ = std::fs::remove_dir_all(&home);
