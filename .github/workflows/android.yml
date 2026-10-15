@@ -107,7 +107,7 @@ jobs:
           toolchain: "1.98.1"
 
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc pkg-config libasound2-dev
 
       - name: Run host tests
         run: cargo test -- --test-threads=1
