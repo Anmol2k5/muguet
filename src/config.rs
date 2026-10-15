@@ -28,6 +28,12 @@ const DEFAULT_CONFIG: &str = r#"{
 "#;
 
 fn support_dir() -> PathBuf {
+    // Android has no HOME-based app dir: the launcher Activity passes its
+    // files dir via MUGUET_SUPPORT_DIR (see docs/ANDROID_BUILD.md).
+    #[cfg(target_os = "android")]
+    if let Ok(dir) = std::env::var("MUGUET_SUPPORT_DIR") {
+        return PathBuf::from(dir);
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     if cfg!(target_os = "ios") {
         return PathBuf::from(home).join("Documents");

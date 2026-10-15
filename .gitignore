@@ -18,3 +18,18 @@ DerivedData/
 /game/
 /gamedat/
 /mirror/
+# Local Android-port diagnostics (per-run compiler logs, never committed)
+/check-*.log
+/build-*.log
+/clippy-*.log
+/cargo-test-*.log
+/test-*.log
+/probe-*.log
+/assemble-*.log
+/gradle-assemble.log
+/android/*.log
+# Android generated outputs (rebuilt via scripts/build-android.sh + gradle)
+/android/app/build/
+/android/.gradle/
+# Staged prebuilt native lib (regenerate: release build + copy to jniLibs, see docs/ANDROID_BUILD.md)
+/android/app/src/main/jniLibs/

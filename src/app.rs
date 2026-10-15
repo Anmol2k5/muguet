@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
@@ -68,7 +68,7 @@ impl ApplicationHandler for App {
             window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         }
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        desc.backends = wgpu::Backends::METAL;
+        desc.backends = gpu::NATIVE_BACKENDS;
         let instance = wgpu::Instance::new(desc);
         let surface = instance.create_surface(window.clone()).expect("create surface");
         *gpu::SURFACE.lock().unwrap() = Some(gpu::SurfaceHandoff { instance, surface, window: window.clone() });
@@ -271,9 +271,24 @@ impl App {
 }
 
 pub fn run(rt: Option<Arc<Runtime>>, startup: crate::config::Startup, args: Vec<String>) -> anyhow::Result<()> {
-    let event_loop = EventLoop::new()?;
-    event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App { mode_chosen: false, rt, startup, args, window: None, started: false, launcher_shown: false, locked: false, mods: ModifiersState::empty(), wheel_accum: 0.0 };
-    event_loop.run_app(&mut app)?;
-    Ok(())
+    #[cfg(target_os = "android")]
+    {
+        use winit::event_loop::EventLoop;
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let event_loop = EventLoop::builder()
+            .with_android_app(crate::take_android_app().expect("android app missing"))
+            .build()?;
+        event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.run_app(&mut app)?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        use winit::event_loop::EventLoop;
+        let event_loop = EventLoop::new()?;
+        event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.run_app(&mut app)?;
+        Ok(())
+    }
 }

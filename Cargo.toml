@@ -15,22 +15,31 @@ serde_json = "1.0.151"
 wgpu = "30.0.1"
 pollster = "1.0.1"
 regex = "1.13.1"
-winit = "0.30.13"
+winit = { version = "0.30.13", features = ["android-native-activity"] }
 cpal = "0.18.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-objc2 = "0.6"
-block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
-objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
-objc2-game-controller = { version = "0.3", default-features = false, features = ["std", "GCController", "GCExtendedGamepad", "GCPhysicalInputProfile", "GCControllerElement", "GCControllerAxisInput", "GCControllerButtonInput", "GCControllerDirectionPad", "GCKeyboard", "GCKeyboardInput", "GCKeyCodes", "objc2-core-foundation", "GCMouse", "GCMouseInput", "GCDeviceCursor", "block2"] }
 wasmparser = { version = "0.258.3", optional = true }
 wasm-encoder = { version = "0.258.3", optional = true, features = ["wasmparser"] }
 bcdec_rs = "0.2.0"
 audiopus_sys = { version = "0.2", features = ["static"] }
 
+# Apple-only: GameController/UIKit/Metal bindings (macOS/iOS). Android uses
+# platform APIs instead; see docs/ANDROID_ARCHITECTURE_AUDIT.md.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-game-controller = { version = "0.3", default-features = false, features = ["std", "GCController", "GCExtendedGamepad", "GCPhysicalInputProfile", "GCControllerElement", "GCControllerAxisInput", "GCControllerButtonInput", "GCControllerDirectionPad", "GCKeyboard", "GCKeyboardInput", "GCKeyCodes", "objc2-core-foundation", "GCMouse", "GCMouseInput", "GCDeviceCursor", "block2"] }
+
 [features]
 default = ["jit"]
 jit = ["wasmtime/cranelift", "wasmtime/parallel-compilation", "dep:wasmparser", "dep:wasm-encoder"]
+
+# cdylib: Android NativeActivity loads libmuguet.so (android_main entry).
+# rlib: desktop bins (src/main.rs) link the same code.
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [profile.release]
 opt-level = 2

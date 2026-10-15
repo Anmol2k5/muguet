@@ -42,6 +42,15 @@ pub static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 pub static PRESENTS: AtomicU64 = AtomicU64::new(0);
 
+/// Native graphics backend for this OS: Metal on Apple, Vulkan on Android.
+/// Everything else in this file is backend-agnostic wgpu.
+#[cfg(target_vendor = "apple")]
+pub const NATIVE_BACKENDS: Backends = Backends::METAL;
+#[cfg(target_os = "android")]
+pub const NATIVE_BACKENDS: Backends = Backends::VULKAN;
+#[cfg(not(any(target_vendor = "apple", target_os = "android")))]
+pub const NATIVE_BACKENDS: Backends = Backends::all();
+
 pub fn start(mem: &SharedMemory, ring: u64, size: u64, dbg: u64) {
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -874,7 +883,7 @@ unsafe impl Send for Gpu {}
 
 pub fn max_msaa() -> u32 {
     let mut d = InstanceDescriptor::new_without_display_handle();
-    d.backends = Backends::METAL;
+    d.backends = NATIVE_BACKENDS;
     let Ok(adapter) = pollster::block_on(Instance::new(d).request_adapter(&RequestAdapterOptions::default())) else { return 4 };
     let formats = [TextureFormat::Rgba8Unorm, TextureFormat::Rgba16Float, TextureFormat::Rg11b10Ufloat, TextureFormat::Depth32FloatStencil8];
     [16, 8, 4, 2]
@@ -888,7 +897,7 @@ impl Gpu {
         let (base, _) = mem_base_len(&mem);
         let (instance, surface) = match handoff {
             Some(h) => (h.instance, Some((h.surface, h.window))),
-            None => { let mut d = InstanceDescriptor::new_without_display_handle(); d.backends = Backends::METAL; (Instance::new(d), None) }
+            None => { let mut d = InstanceDescriptor::new_without_display_handle(); d.backends = NATIVE_BACKENDS; (Instance::new(d), None) }
         };
         let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,

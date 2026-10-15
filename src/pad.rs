@@ -2,6 +2,7 @@
 // Constantin Clerc (c22dev) - 0.1
 
 use crate::input;
+#[cfg(target_vendor = "apple")]
 use objc2_game_controller::{GCController, GCControllerButtonInput, GCExtendedGamepad};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,26 +71,46 @@ pub fn horn_held() -> bool {
 struct State {
     held: HashSet<&'static str>,
     buttons: u8,
+    #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
     last: Instant,
+    #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
     down_since: Option<Instant>,
 }
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 const SWITCH_HOLD: Duration = Duration::from_millis(300);
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 const STICK_DEADZONE: f32 = 0.3;
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 const LOOK_DEADZONE: f32 = 0.12;
 
+#[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
 const LOOK_SPEED: f64 = 700.0;
 
+#[cfg(target_vendor = "apple")]
 fn gamepad() -> Option<objc2::rc::Retained<GCExtendedGamepad>> {
     unsafe { GCController::controllers().iter().find_map(|c| c.extendedGamepad()) }
 }
 
+#[cfg(target_vendor = "apple")]
 fn down(b: &GCControllerButtonInput) -> bool {
     unsafe { b.isPressed() }
 }
 
 pub fn poll() -> bool {
+    // Non-Apple platform gamepad backends (Android: M8) land here; no controller yet.
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        if !FOCUSED.load(Ordering::Relaxed) { release_all(); }
+        return false;
+    }
+    #[cfg(target_vendor = "apple")]
+    poll_apple()
+}
+
+#[cfg(target_vendor = "apple")]
+fn poll_apple() -> bool {
     if !FOCUSED.load(Ordering::Relaxed) { release_all(); return false; }
     let Some(gp) = gamepad() else {
         if ACTIVE.swap(false, Ordering::Relaxed) {

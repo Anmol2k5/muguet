@@ -1,0 +1,30 @@
+plugins {
+    id("com.android.application")
+}
+
+// The Rust cdylib (libmuguet.so) is built by scripts/build-android.sh and
+// staged into app/src/main/jniLibs/arm64-v8a/ before assemble. Gradle never
+// compiles Rust; it only packages the prebuilt .so.
+android {
+    namespace = "dev.muguet.android"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "dev.muguet.android"
+        minSdk = 29
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0"
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
