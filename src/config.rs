@@ -106,11 +106,25 @@ pub fn setup() -> anyhow::Result<Startup> {
 
     set_default("MUGUET_FSROOT", support.join("saves"));
     let build = locate();
-    #[cfg(not(target_os = "ios"))]
-    let build = build?;
-    #[cfg(target_os = "ios")]
-    let build = build.unwrap_or_default();
+    let build = finish_locate(build)?;
     Ok(Startup { wasm_path: build.join("game.wasm"), cache_dir: support, engine_args })
+}
+
+/// Missing game data is fatal on desktop (the CLI tells you to import) but an
+/// expected, nonfatal state on mobile launchers: iOS bakes the code in, and
+/// Android shows a missing-assets status while asset-independent self-tests
+/// can still run. Storage failures (no support dir at all) stay fatal
+/// everywhere: without storage nothing can work.
+fn finish_locate(build: anyhow::Result<PathBuf>) -> anyhow::Result<PathBuf> {
+    finish_locate_inner(build, cfg!(any(target_os = "ios", target_os = "android")))
+}
+
+fn finish_locate_inner(build: anyhow::Result<PathBuf>, tolerate_missing: bool) -> anyhow::Result<PathBuf> {
+    if tolerate_missing {
+        Ok(build.unwrap_or_default())
+    } else {
+        build
+    }
 }
 
 fn locate() -> anyhow::Result<PathBuf> {
@@ -207,5 +221,122 @@ fn fix_settings(texture_quality: Option<i64>, no_msaa: bool) {
     }
     if new != xml {
         let _ = std::fs::write(&path, new.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Process env is shared across test threads: every test that touches
+    /// HOME / MUGUET_* must hold this. (CI also runs with --test-threads=1.)
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const ENV_KEYS: &[&str] = &["HOME", "MUGUET_FSROOT", "MUGUET_DATA", "MUGUET_SHADERS"];
+
+    struct Env {
+        saved: Vec<(String, Option<OsString>)>,
+    }
+
+    impl Env {
+        /// Point HOME at a fresh scratch dir and clear Muguet vars.
+        fn scratch(tag: &str) -> (MutexGuard<'static, ()>, Env, PathBuf) {
+            let guard = ENV_LOCK.lock().unwrap();
+            let mut saved = Vec::new();
+            for k in ENV_KEYS {
+                saved.push((k.to_string(), std::env::var_os(k)));
+                std::env::remove_var(k);
+            }
+            let home = std::env::temp_dir().join(format!("muguet-cfg-test-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&home);
+            std::env::set_var("HOME", &home);
+            (guard, Env { saved }, home)
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            for (k, v) in self.saved.drain(..) {
+                match v {
+                    Some(v) => std::env::set_var(&k, v),
+                    None => std::env::remove_var(&k),
+                }
+            }
+        }
+    }
+
+    fn write_layout(home: &Path, with_manifest: bool, with_shaders: bool, with_wasm: bool) {
+        if with_manifest {
+            let data = home.join("game/data");
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::write(data.join("manifest.json"), "{}").unwrap();
+        }
+        if with_shaders {
+            let sh = home.join("game/b/1/shaders");
+            std::fs::create_dir_all(&sh).unwrap();
+            std::fs::write(sh.join("index.json"), "{}").unwrap();
+        }
+        if with_wasm {
+            std::fs::write(home.join("game/b/1/game.wasm"), []).unwrap();
+        }
+    }
+
+    #[test]
+    fn locate_tolerance_policy() {
+        // Missing assets: fatal on desktop, tolerated on mobile launchers.
+        // Invalid input path must never become a silent empty success on desktop.
+        let err = || anyhow::anyhow!("no game data");
+        assert!(finish_locate_inner(Err(err()), true).unwrap().as_os_str().is_empty());
+        assert!(finish_locate_inner(Err(err()), false).is_err());
+        assert_eq!(finish_locate_inner(Ok(PathBuf::from("b/1")), true).unwrap(), PathBuf::from("b/1"));
+        assert_eq!(finish_locate_inner(Ok(PathBuf::from("b/1")), false).unwrap(), PathBuf::from("b/1"));
+    }
+
+    #[test]
+    fn missing_assets_are_not_ready() {
+        let (_g, _env, home) = Env::scratch("missing");
+        assert!(!game_ready());
+        // Manifest alone is not enough (shaders index required too).
+        write_layout(&home, true, false, false);
+        assert!(!game_ready());
+    }
+
+    #[test]
+    fn invalid_assets_stay_not_ready() {
+        let (_g, _env, home) = Env::scratch("invalid");
+        // Shaders without a manifest, and wasm without either, are rejected.
+        write_layout(&home, false, true, true);
+        assert!(!game_ready());
+        // Manifest + shaders but no game.wasm: not ready under jit.
+        write_layout(&home, true, true, false);
+        if cfg!(feature = "jit") && !crate::code_embedded() {
+            assert!(!game_ready());
+        }
+    }
+
+    #[test]
+    fn normal_init_with_valid_layout() {
+        let (_g, _env, home) = Env::scratch("valid");
+        write_layout(&home, true, true, true);
+        assert!(game_ready());
+        let startup = setup().expect("setup must succeed with a valid layout");
+        assert!(startup.wasm_path.ends_with("game.wasm"));
+        assert!(home.join("saves").is_dir());
+        assert!(home.join("config.json").is_file());
+        assert_eq!(std::env::var("MUGUET_FSROOT").unwrap(), home.join("saves").to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn corrupt_config_falls_back_to_defaults() {
+        let (_g, _env, home) = Env::scratch("corrupt");
+        write_layout(&home, true, true, true);
+        // Invalid JSON must not fail init; defaults apply.
+        std::fs::write(home.join("config.json"), "{not json").unwrap();
+        let startup = setup().expect("setup must tolerate a corrupt config.json");
+        assert!(startup.wasm_path.ends_with("game.wasm"));
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

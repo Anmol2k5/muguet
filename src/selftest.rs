@@ -16,23 +16,26 @@
 use anyhow::{Context, Result};
 use wasmtime::*;
 
-pub fn requested(argv: &[String], support_dir: &std::path::Path) -> Option<String> {
+pub fn requested(argv: &[String], _support_dir: &std::path::Path) -> Option<String> {
     for a in argv.iter().skip(1) {
         if let Some(kind) = a.strip_prefix("--selftest=") {
             return Some(kind.to_string());
         }
     }
     #[cfg(target_os = "android")]
-    {
-        let marker = support_dir.join("SELFTEST");
-        if let Ok(text) = std::fs::read_to_string(&marker) {
-            let kind = text.trim().to_lowercase();
-            if ["wasm", "vulkan", "all"].contains(&kind.as_str()) {
-                return Some(kind);
-            }
-        }
+    if let Some(kind) = requested_from_marker(_support_dir) {
+        return Some(kind);
     }
     None
+}
+
+/// Android trigger for asset-independent self-tests: a `SELFTEST` file holding
+/// `wasm`, `vulkan` or `all` in the support dir (placed via `run-as` + push or
+/// Device File Explorer). Pure filesystem logic so it unit-tests anywhere.
+fn requested_from_marker(support_dir: &std::path::Path) -> Option<String> {
+    let kind = std::fs::read_to_string(support_dir.join("SELFTEST")).ok()?;
+    let kind = kind.trim().to_lowercase();
+    ["wasm", "vulkan", "all"].contains(&kind.as_str()).then(|| kind)
 }
 
 pub fn run(kind: &str) -> Result<()> {
@@ -345,5 +348,32 @@ mod tests {
                 .validate_all(&m)
                 .expect("selftest fixture must validate");
         }
+    }
+
+    /// CLI trigger works on every host; unknown kinds pass through for run()
+    /// to reject with a clear error (never silently ignored).
+    #[test]
+    fn cli_trigger_parsing() {
+        let argv = vec!["muguet".to_string(), "--selftest=vulkan".to_string()];
+        assert_eq!(super::requested(&argv, std::path::Path::new("/none")).as_deref(), Some("vulkan"));
+        let argv = vec!["muguet".to_string()];
+        assert_eq!(super::requested(&argv, std::path::Path::new("/none")), None);
+        let argv = vec!["muguet".to_string(), "--selftest=bogus".to_string()];
+        assert_eq!(super::requested(&argv, std::path::Path::new("/none")).as_deref(), Some("bogus"));
+    }
+
+    /// Marker-file trigger (Android SELFTEST): valid kinds accepted
+    /// case-insensitively, anything else ignored, missing file is None.
+    #[test]
+    fn marker_trigger_parsing() {
+        let dir = std::env::temp_dir().join(format!("muguet-marker-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(super::requested_from_marker(&dir), None);
+        std::fs::write(dir.join("SELFTEST"), "VuLkAn\n").unwrap();
+        assert_eq!(super::requested_from_marker(&dir).as_deref(), Some("vulkan"));
+        std::fs::write(dir.join("SELFTEST"), "nonsense").unwrap();
+        assert_eq!(super::requested_from_marker(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

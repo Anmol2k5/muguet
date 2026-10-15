@@ -90,3 +90,24 @@ jobs:
         with:
           name: muguet-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+  # Host-executed regression tests (config layout/tolerance, selftest
+  # triggers, fixtures). These run on Linux, NOT on Android: they cover
+  # host-testable logic only and never touch a device or game assets.
+  # Single-threaded: tests mutate process env (HOME/MUGUET_*) behind a lock,
+  # and --test-threads=1 removes any residual cross-test interference.
+  test-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc
+
+      - name: Run host tests
+        run: cargo test -- --test-threads=1

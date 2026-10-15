@@ -298,6 +298,14 @@ pub fn run() -> Result<()> {
         selftest::run(&kind)?;
         return Ok(());
     }
+    // Android without game data is an expected state, not a fatal error: log
+    // a useful missing-assets status and continue to the event loop (and to
+    // the rt=None path below) instead of terminating the process.
+    #[cfg(target_os = "android")]
+    if !config::game_ready() {
+        crate::alog::e("assets", "no game data: import your game .zip from the launcher; running without game code");
+        eprintln!("[config] no game data: import your game .zip from the launcher");
+    }
     // Android shell (M3): reach the event loop even with no game data yet;
     // the missing-data error is logged and import lands later.
     #[cfg(target_os = "android")]
