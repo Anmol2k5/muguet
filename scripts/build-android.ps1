@@ -53,6 +53,8 @@ switch ($Mode) {
   "check"   { Invoke-Native cargo @("check", "--target", "aarch64-linux-android") }
   "build"   { Invoke-Native cargo @("build", "--target", "aarch64-linux-android") }
   "release" { Invoke-Native cargo @("build", "--release", "--target", "aarch64-linux-android") }
+  "clippy"  { Invoke-Native cargo @("clippy", "--target", "aarch64-linux-android") }
+  "test-norun" { Invoke-Native cargo @("test", "--target", "aarch64-linux-android", "--no-run") }
   "apk" {
     Invoke-Native cargo @("build", "--release", "--target", "aarch64-linux-android")
     $So = "target\aarch64-linux-android\release\libmuguet.so"
@@ -77,5 +79,5 @@ switch ($Mode) {
     echo "[apk] $Apk"
     (Get-FileHash $Apk -Algorithm SHA256).Hash
   }
-  default   { throw "usage: build-android.ps1 [check|build|release|apk]" }
+  default   { throw "usage: build-android.ps1 [check|build|release|clippy|test-norun|apk]" }
 }

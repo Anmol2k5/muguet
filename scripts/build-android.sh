@@ -1,6 +1,6 @@
 #!/bin/bash
 # Muguet Android build: native Rust runtime for aarch64-linux-android.
-# Usage: scripts/build-android.sh [check|build|release|apk]  (default: check)
+# Usage: scripts/build-android.sh [check|build|release|clippy|test-norun|apk]  (default: check)
 # Requires: Rust 1.98.1 + aarch64-linux-android std, Android SDK + NDK r27.
 # Env knobs: ANDROID_HOME / ANDROID_SDK_ROOT, ANDROID_NDK_HOME, NDK_API (default 29).
 set -euo pipefail
@@ -53,6 +53,8 @@ case "$MODE" in
   check)   exec cargo check --target "$TARGET" ;;
   build)   exec cargo build --target "$TARGET" ;;
   release) exec cargo build --release --target "$TARGET" ;;
+  clippy)  exec cargo clippy --target "$TARGET" ;;
+  test-norun) exec cargo test --target "$TARGET" --no-run ;;
   apk)
     cargo build --release --target "$TARGET"
     SO="target/$TARGET/release/libmuguet.so"
@@ -76,5 +78,5 @@ case "$MODE" in
     echo "[apk] $APK"
     sha256sum "$APK" 2>/dev/null || shasum -a 256 "$APK"
     ;;
-  *) echo "usage: $0 [check|build|release|apk]" >&2; exit 1 ;;
+  *) echo "usage: $0 [check|build|release|clippy|test-norun|apk]" >&2; exit 1 ;;
 esac

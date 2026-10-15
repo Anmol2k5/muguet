@@ -2,6 +2,10 @@
 # compiles the Rust runtime, runs source-level checks, assembles the debug
 # APK and verifies its contents. Host tool runs that need macOS
 # (--precompile-ios, mac .app) are NOT covered here.
+#
+# SDK setup uses android-actions/setup-android@v4 (v3 requested the obsolete
+# `tools` package and fails; v4 skips it with a warning). All other actions
+# stay pinned; bump only with reason.
 name: android
 
 on:
@@ -24,7 +28,7 @@ jobs:
       - name: Install Rust 1.98.1 + Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.1
+          toolchain: "1.98.1"
           targets: aarch64-linux-android
           components: rustfmt, clippy
 
@@ -35,9 +39,12 @@ jobs:
           java-version: 17
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
-      - name: Install NDK + CMake + Ninja
+      - name: Export ANDROID_HOME
+        run: echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+
+      - name: Install platform, build-tools, NDK
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;${NDK_VERSION}"
           sudo apt-get update && sudo apt-get install -y cmake ninja-build
@@ -46,59 +53,36 @@ jobs:
         run: ./scripts/build-android.sh check
 
       - name: Rust clippy (Android ARM64)
-        run: |
-          export PATH="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          export CC_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang"
-          export CXX_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang++"
-          export AR_aarch64_linux_android="llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android${NDK_API}-clang"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--build-id=sha1"
-          export CMAKE_TOOLCHAIN_FILE_aarch64_linux_android="$PWD/scripts/android.toolchain.cmake"
-          export CMAKE_GENERATOR=Ninja
-          cargo clippy --target aarch64-linux-android --message-format short -- -D warnings
+        run: ./scripts/build-android.sh clippy
 
       - name: Compile tests (Android ARM64, no run)
-        run: |
-          export PATH="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          export CC_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang"
-          export CXX_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang++"
-          export AR_aarch64_linux_android="llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android${NDK_API}-clang"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--build-id=sha1"
-          export CMAKE_TOOLCHAIN_FILE_aarch64_linux_android="$PWD/scripts/android.toolchain.cmake"
-          export CMAKE_GENERATOR=Ninja
-          cargo test --target aarch64-linux-android --no-run
+        run: ./scripts/build-android.sh test-norun
 
-      - name: Verify 16 KB page alignment (fresh .so)
+      - name: Release build + 16 KB alignment check
         run: |
+          ./scripts/build-android.sh release
           export PATH="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          export CC_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang"
-          export CXX_aarch64_linux_android="aarch64-linux-android${NDK_API}-clang++"
-          export AR_aarch64_linux_android="llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="aarch64-linux-android${NDK_API}-clang"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,--build-id=sha1"
-          export CMAKE_TOOLCHAIN_FILE_aarch64_linux_android="$PWD/scripts/android.toolchain.cmake"
-          export CMAKE_GENERATOR=Ninja
-          cargo build --release --target aarch64-linux-android
           llvm-readelf -l target/aarch64-linux-android/release/libmuguet.so | grep LOAD
           llvm-readelf -l target/aarch64-linux-android/release/libmuguet.so | grep -q "0x4000" || (echo "LOAD segments not 16KB-aligned" && exit 1)
+          llvm-nm -D --defined-only target/aarch64-linux-android/release/libmuguet.so | grep -q " T android_main" || (echo "android_main missing" && exit 1)
 
-      - name: Assemble debug APK
+      - name: Assemble debug APK + lint
         run: |
+          SO=target/aarch64-linux-android/release/libmuguet.so
+          test -f "$SO" || (echo "missing $SO, refusing to package a stale library" && exit 1)
+          sha256sum "$SO"
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          cp target/aarch64-linux-android/release/libmuguet.so android/app/src/main/jniLibs/arm64-v8a/
+          rm -f android/app/src/main/jniLibs/arm64-v8a/libmuguet.so
+          cp "$SO" android/app/src/main/jniLibs/arm64-v8a/
           (cd android && ./gradlew :app:assembleDebug :app:lintDebug)
 
       - name: Verify APK contents
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
-          test -f "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "native-code: 'arm64-v8a'"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "package: name='dev.muguet.android'"
-          unzip -l "$APK" | grep "lib/arm64-v8a/libmuguet.so"
+          test -f "$APK" || (echo "APK missing" && exit 1)
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "package: name='dev.muguet.android'" || (echo "bad package" && exit 1)
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -q "native-code: 'arm64-v8a'" || (echo "bad abi" && exit 1)
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libmuguet.so" || (echo "lib missing from APK" && exit 1)
           sha256sum "$APK"
 
       - name: Upload APK
