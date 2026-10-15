@@ -274,6 +274,14 @@ mod tests {
     }
 
     fn write_layout(support: &Path, with_manifest: bool, with_shaders: bool, with_wasm: bool) {
+        // Reset between invocations: files from a previous call in the same
+        // test (e.g. game.wasm) must not leak into the next fixture.
+        // Only a missing dir is tolerated; anything else is a real fs error.
+        match std::fs::remove_dir_all(support.join("game")) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("resetting game fixture: {e}"),
+        }
         if with_manifest {
             let data = support.join("game/data");
             std::fs::create_dir_all(&data).unwrap();
@@ -285,6 +293,7 @@ mod tests {
             std::fs::write(sh.join("index.json"), "{}").unwrap();
         }
         if with_wasm {
+            std::fs::create_dir_all(support.join("game/b/1")).unwrap();
             std::fs::write(support.join("game/b/1/game.wasm"), []).unwrap();
         }
     }
